@@ -2,21 +2,25 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-// Use better-sqlite3 instead of sqlite3
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const dbPath = path.resolve(__dirname, 'config', 'feedback.db');
-const db = new Database(dbPath);
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) console.error('Error opening database:', err.message);
+  else console.log('Connected to SQLite database.');
+});
 
 // Ensure table exists
-db.prepare(`CREATE TABLE IF NOT EXISTS Feedback (
+db.run(`CREATE TABLE IF NOT EXISTS Feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   studentName TEXT NOT NULL,
   courseCode TEXT NOT NULL,
   comments TEXT,
   rating INTEGER NOT NULL,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-)`).run();
+)`, (err) => {
+  if (err) console.error('Error creating table:', err.message);
+});
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,13 +33,13 @@ app.use(express.json());
 
 // GET all feedback
 app.get('/api/feedback', (req, res) => {
-  try {
-    const rows = db.prepare('SELECT * FROM Feedback ORDER BY createdAt DESC').all();
+  db.all('SELECT * FROM Feedback ORDER BY createdAt DESC', [], (err, rows) => {
+    if (err) {
+      console.error('Error fetching feedback:', err.message);
+      return res.status(500).json({ error: 'Failed to fetch feedback' });
+    }
     res.json(rows);
-  } catch (err) {
-    console.error('Error fetching feedback:', err);
-    res.status(500).json({ error: 'Failed to fetch feedback' });
-  }
+  });
 });
 
 // POST new feedback
@@ -53,39 +57,38 @@ app.post('/api/feedback', (req, res) => {
     return res.status(400).json({ error: 'Rating must be between 1 and 5' });
   }
 
-  try {
-    const stmt = db.prepare(
-      'INSERT INTO Feedback (studentName, courseCode, comments, rating) VALUES (?, ?, ?, ?)'
-    );
-    const info = stmt.run(studentName, courseCode, comments, rating);
-
-    res.status(201).json({
-      message: 'Feedback submitted successfully',
-      id: info.lastInsertRowid
-    });
-  } catch (err) {
-    console.error('Error adding feedback:', err);
-    res.status(500).json({ error: 'Failed to add feedback' });
-  }
+  db.run(
+    'INSERT INTO Feedback (studentName, courseCode, comments, rating) VALUES (?, ?, ?, ?)',
+    [studentName, courseCode, comments, rating],
+    function (err) {
+      if (err) {
+        console.error('Error adding feedback:', err.message);
+        return res.status(500).json({ error: 'Failed to add feedback' });
+      }
+      res.status(201).json({
+        message: 'Feedback submitted successfully',
+        id: this.lastID
+      });
+    }
+  );
 });
 
 // DELETE feedback
 app.delete('/api/feedback/:id', (req, res) => {
   const { id } = req.params;
 
-  try {
-    const stmt = db.prepare('DELETE FROM Feedback WHERE id = ?');
-    const info = stmt.run(id);
+  db.run('DELETE FROM Feedback WHERE id = ?', [id], function (err) {
+    if (err) {
+      console.error('Error deleting feedback:', err.message);
+      return res.status(500).json({ error: 'Failed to delete feedback' });
+    }
 
-    if (info.changes === 0) {
+    if (this.changes === 0) {
       return res.status(404).json({ error: 'Feedback not found' });
     }
 
     res.json({ message: 'Feedback deleted successfully' });
-  } catch (err) {
-    console.error('Error deleting feedback:', err);
-    res.status(500).json({ error: 'Failed to delete feedback' });
-  }
+  });
 });
 
 // Error handling middleware
